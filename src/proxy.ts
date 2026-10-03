@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { buildMissionControlCsp, buildNonceRequestHeaders } from '@/lib/csp'
 import { MC_SESSION_COOKIE_NAME, LEGACY_MC_SESSION_COOKIE_NAME } from '@/lib/session-cookie'
+import { isAutoLoginEnabled, isLoopbackHostHeader } from '@/lib/auto-login'
 
 /** Constant-time string comparison using Node.js crypto. */
 function safeCompare(a: string, b: string): boolean {
@@ -235,12 +236,21 @@ export function proxy(request: NextRequest) {
     return addSecurityHeaders(response, request, nonce)
   }
 
+  // Loopback auto-login: this edge guard only hands off to the Node endpoint,
+  // which re-checks every condition before it can mint a session.
+  if (isAutoLoginEnabled() && isLoopbackHostHeader(request.headers.get('host'))) {
+    const autoLoginUrl = request.nextUrl.clone()
+    autoLoginUrl.pathname = '/api/auth/auto-login'
+    autoLoginUrl.search = ''
+    autoLoginUrl.searchParams.set('next', `${pathname}${request.nextUrl.search ?? ''}`)
+    return addSecurityHeaders(NextResponse.redirect(autoLoginUrl), request)
+  }
+
   // Redirect to login
   const loginUrl = request.nextUrl.clone()
   loginUrl.pathname = '/login'
   return addSecurityHeaders(NextResponse.redirect(loginUrl), request)
 }
-
 export const config = {
   matcher: ['/((?!_next/static|_next/image|favicon.ico|brand/).*)']
 }

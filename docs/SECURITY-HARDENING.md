@@ -57,6 +57,30 @@ MC_ALLOWED_HOSTS=localhost,127.0.0.1
 
 Deploy behind a reverse proxy with TLS (Caddy, nginx, Tailscale Funnel) for any network-accessible deployment.
 
+#### Loopback auto-login (`MC_AUTO_LOGIN`) — read this before enabling
+
+`MC_AUTO_LOGIN=1` mints a session for a local browser so the login page is skipped. It is
+opt-in and denies (redirects to `/login`) unless **every** check passes:
+
+| Check | How it is verified |
+|---|---|
+| Flag is set to `1/true/yes/on` | `MC_AUTO_LOGIN` read on each request |
+| Request targets this machine | `Host` header is `localhost`, `::1`, or `127.0.0.0/8` — an absolute-form host, not a resolved name |
+| The port is not reachable off-box | **Measured**: `net.connect` to the bound port on every non-loopback interface address. A `0.0.0.0` bind, a port-forward, or a proxy on a LAN address all trip this and disable auto-login. Configuration is not trusted here. |
+| The account is a real local admin | `AUTH_USER` (default `admin`) exists, `provider = local`, `is_approved = 1` |
+| The redirect target is same-origin | `next` must be a single-slash path; `//host`, `/\\host`, and scheme URLs fall back to `/` |
+
+Two consequences worth knowing:
+
+- The edge guard (`src/proxy.ts`) only *hands off* to `GET /api/auth/auto-login`; the Node route
+  re-checks all of the above before it can call `createSession`. A request that reaches the route
+  directly gets the same verdict as one that came through the guard.
+- `auto_login` is written to the audit log (`action=auto_login`, `ip_address=127.0.0.1`), so a
+  session that was not obtained with a password is visible in `/api/audit`.
+
+Do not enable it on a host that also serves the dashboard to other users, and do not pair it with
+`MC_ALLOW_ANY_HOST=1`.
+
 ### 3. HTTPS & Cookies
 
 For HTTPS deployments:

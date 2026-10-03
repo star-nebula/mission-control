@@ -218,3 +218,71 @@ describe('proxy host matching', () => {
     expect(response.status).not.toBe(403)
   })
 })
+
+describe('proxy loopback auto-login handoff', () => {
+  function pageRequest(host: string, pathname: string, cookie?: string) {
+    const base = `http://${host}${pathname}`
+    return {
+      headers: new Headers({ host }),
+      nextUrl: Object.assign(new URL(base), { host, clone: () => new URL(base) }),
+      method: 'GET',
+      cookies: { get: () => (cookie ? { value: cookie } : undefined) },
+    } as any
+  }
+
+  async function loadProxy() {
+    vi.resetModules()
+    vi.doMock('node:os', () => ({
+      default: { hostname: () => 'local-box' },
+      hostname: () => 'local-box',
+    }))
+    const { proxy } = await import('./proxy')
+    setNodeEnv('production')
+    process.env.MC_ALLOWED_HOSTS = '127.0.0.1,localhost,192.168.1.5'
+    delete process.env.MC_ALLOW_ANY_HOST
+    return proxy
+  }
+
+  it('routes an unsigned page request to the auto-login endpoint when enabled on loopback', async () => {
+    const proxy = await loadProxy()
+    process.env.MC_AUTO_LOGIN = '1'
+
+    const response = proxy(pageRequest('127.0.0.1:3000', '/chat'))
+
+    expect(response.status).toBe(307)
+    const location = new URL(response.headers.get('location') as string)
+    expect(location.pathname).toBe('/api/auth/auto-login')
+    expect(location.searchParams.get('next')).toBe('/chat')
+    delete process.env.MC_AUTO_LOGIN
+  })
+
+  it('keeps the stock login redirect when the flag is not set', async () => {
+    const proxy = await loadProxy()
+    delete process.env.MC_AUTO_LOGIN
+
+    const response = proxy(pageRequest('127.0.0.1:3000', '/chat'))
+
+    expect(response.status).toBe(307)
+    expect(new URL(response.headers.get('location') as string).pathname).toBe('/login')
+  })
+
+  it('does not hand off when the request arrived on a non-loopback host', async () => {
+    const proxy = await loadProxy()
+    process.env.MC_AUTO_LOGIN = '1'
+
+    const response = proxy(pageRequest('192.168.1.5:3000', '/chat'))
+
+    expect(new URL(response.headers.get('location') as string).pathname).toBe('/login')
+    delete process.env.MC_AUTO_LOGIN
+  })
+
+  it('leaves an already signed-in request alone', async () => {
+    const proxy = await loadProxy()
+    process.env.MC_AUTO_LOGIN = '1'
+
+    const response = proxy(pageRequest('127.0.0.1:3000', '/chat', 'existing-session-token'))
+
+    expect(response.status).toBe(200)
+    delete process.env.MC_AUTO_LOGIN
+  })
+})
